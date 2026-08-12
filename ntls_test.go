@@ -1149,6 +1149,126 @@ func TestTLS13Connection(t *testing.T) {
 	}
 }
 
+func TestAutoTLCPAndTLS13Server(t *testing.T) {
+	ctx, err := ts.NewAutoCtx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ctx.Close)
+
+	if err := ctx.SetCipherList(ECCSM2Cipher); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.SetCipherSuites(TLSSMGCMCipher + ":" + TLSSMCCMCipher); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctxSetGMDoubleCertKey(ctx,
+		filepath.Join(testCertDir, "server_sign.crt"),
+		filepath.Join(testCertDir, "server_sign.key"),
+		filepath.Join(testCertDir, "server_enc.crt"),
+		filepath.Join(testCertDir, "server_enc.key")); err != nil {
+		t.Fatal(err)
+	}
+
+	certPEM, err := os.ReadFile("test/certs/sm2-cert.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := crypto.LoadCertificateFromPEM(certPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.UseCertificate(cert); err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := os.ReadFile("test/certs/sm2.key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := crypto.LoadPrivateKeyFromPEM(keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.UsePrivateKey(key); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctx.CheckPrivateKey(); err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := ts.Listen("tcp", "127.0.0.1:0", ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &echoServer{listener}
+	t.Cleanup(func() { _ = server.Close() })
+	go func() { _ = server.Run() }()
+
+	t.Run("TLCP", func(t *testing.T) {
+		clientCtx, err := ts.NewCtxWithVersion(ts.NTLS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clientCtx.Close()
+		if err := clientCtx.SetCipherList(ECCSM2Cipher); err != nil {
+			t.Fatal(err)
+		}
+		conn, err := ts.Dial("tcp", server.Addr().String(), clientCtx,
+			ts.InsecureSkipHostVerification, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if !conn.IsNTLS() {
+			t.Fatal("expected TLCP/NTLS connection")
+		}
+		assertEcho(t, conn)
+	})
+
+	t.Run("RFC8998", func(t *testing.T) {
+		clientCtx, err := ts.NewCtxWithVersion(ts.TLSv1_3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clientCtx.Close()
+		clientCtx.EnableSMTLS13Strict()
+		if err := clientCtx.SetCipherSuites(TLSSMGCMCipher); err != nil {
+			t.Fatal(err)
+		}
+		conn, err := ts.Dial("tcp", server.Addr().String(), clientCtx,
+			ts.InsecureSkipHostVerification, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if conn.IsNTLS() {
+			t.Fatal("expected standard TLS connection")
+		}
+		version, err := conn.GetVersion()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if version != "TLSv1.3" {
+			t.Fatalf("expected TLSv1.3, got %s", version)
+		}
+		assertEcho(t, conn)
+	})
+}
+
+func assertEcho(t *testing.T, conn net.Conn) {
+	t.Helper()
+	if _, err := conn.Write([]byte(testRequest)); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp != testRequest {
+		t.Fatalf("unexpected echo response %q", resp)
+	}
+}
+
 func newTLS13Server(t *testing.T, testDir string, options ...func(sslctx *ts.Ctx) error) (*echoServer, error) {
 	t.Helper()
 

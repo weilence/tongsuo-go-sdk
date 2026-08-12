@@ -15,6 +15,7 @@
 package tongsuogo_test
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -55,4 +56,32 @@ func TestCtxSessCacheSizeOption(t *testing.T) {
 	if newSize1 != newSize2 {
 		t.Error("SessSetCacheSize() does not save anything to ctx")
 	}
+}
+
+func TestCtxCloseIsIdempotent(t *testing.T) {
+	ctx, err := ts.NewAutoCtx()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx.Close()
+	ctx.Close()
+}
+
+func TestConnFreeIsIdempotent(t *testing.T) {
+	ctx, err := ts.NewCtx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx.Close()
+
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	defer serverSide.Close()
+	conn, err := ts.Client(clientSide, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Free()
+	conn.Free()
 }

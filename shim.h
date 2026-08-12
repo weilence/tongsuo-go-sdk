@@ -30,6 +30,10 @@
 #define SSL_OP_NO_COMPRESSION 0
 #endif
 
+#ifndef SSL_OP_NO_RENEGOTIATION
+#define SSL_OP_NO_RENEGOTIATION 0
+#endif
+
 /* shim  methods */
 extern void X_tongsuogo_init(void);
 
@@ -41,6 +45,7 @@ extern long X_SSL_set_tlsext_host_name(SSL *ssl, const char *name);
 extern const char *X_SSL_get_cipher_name(const SSL *ssl);
 extern const char *X_SSL_get_version(const SSL *ssl);
 extern int X_SSL_session_reused(SSL *ssl);
+extern int X_SSL_is_ntls(const SSL *ssl);
 extern int X_SSL_new_index();
 
 extern const SSL_METHOD *X_SSLv23_method();
@@ -62,6 +67,12 @@ extern int X_SSL_verify_cb(int ok, X509_STORE_CTX* store);
 /* SSL_CTX methods */
 extern int X_SSL_CTX_new_index();
 extern void X_SSL_CTX_enable_ntls(SSL_CTX* ctx);
+extern void X_SSL_CTX_disable_ntls(SSL_CTX* ctx);
+extern void X_SSL_CTX_enable_sm_tls13_strict(SSL_CTX* ctx);
+extern void X_SSL_CTX_disable_sm_tls13_strict(SSL_CTX* ctx);
+extern int X_SSL_CTX_check_private_key(const SSL_CTX* ctx);
+extern int X_SSL_CTX_set1_groups_list(SSL_CTX* ctx, const char* list);
+extern int X_SSL_CTX_set_num_tickets(SSL_CTX* ctx, size_t num_tickets);
 extern long X_SSL_CTX_set_options(SSL_CTX* ctx, long options);
 extern long X_SSL_CTX_clear_options(SSL_CTX* ctx, long options);
 extern long X_SSL_CTX_get_options(SSL_CTX* ctx);
@@ -73,6 +84,7 @@ extern long X_SSL_CTX_sess_get_cache_size(SSL_CTX* ctx);
 extern long X_SSL_CTX_set_timeout(SSL_CTX* ctx, long t);
 extern long X_SSL_CTX_get_timeout(SSL_CTX* ctx);
 extern long X_SSL_CTX_add_extra_chain_cert(SSL_CTX* ctx, X509 *cert);
+extern long X_SSL_CTX_add1_chain_cert(SSL_CTX* ctx, X509 *cert);
 extern long X_SSL_CTX_set_tmp_ecdh(SSL_CTX* ctx, EC_KEY *key);
 extern long X_SSL_CTX_set_tlsext_servername_callback(SSL_CTX* ctx, int (*cb)(SSL *con, int *ad, void *args));
 extern int X_SSL_CTX_verify_cb(int ok, X509_STORE_CTX* store);

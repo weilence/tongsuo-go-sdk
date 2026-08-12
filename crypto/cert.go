@@ -191,6 +191,14 @@ func (c *Certificate) GetCert() *C.X509 {
 	return c.x
 }
 
+// CheckPrivateKey verifies that key matches the certificate public key.
+func (c *Certificate) CheckPrivateKey(key PrivateKey) error {
+	if key == nil || C.X509_check_private_key(c.x, key.EvpPKey()) != 1 {
+		return fmt.Errorf("certificate and private key do not match: %w", PopError())
+	}
+	return nil
+}
+
 func (c *Certificate) GetSubjectName() (*Name, error) {
 	n := C.X509_get_subject_name(c.x)
 	if n == nil {

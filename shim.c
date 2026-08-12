@@ -62,6 +62,10 @@ int X_SSL_session_reused(SSL *ssl) {
     return SSL_session_reused(ssl);
 }
 
+int X_SSL_is_ntls(const SSL *ssl) {
+    return SSL_is_ntls(ssl);
+}
+
 int X_SSL_new_index() {
 	return SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
 }
@@ -130,7 +134,31 @@ int X_SSL_CTX_new_index() {
 }
 
 void X_SSL_CTX_enable_ntls(SSL_CTX* ctx) {
-	return SSL_CTX_enable_ntls(ctx);
+	SSL_CTX_enable_ntls(ctx);
+}
+
+void X_SSL_CTX_disable_ntls(SSL_CTX* ctx) {
+	SSL_CTX_disable_ntls(ctx);
+}
+
+void X_SSL_CTX_enable_sm_tls13_strict(SSL_CTX* ctx) {
+	SSL_CTX_enable_sm_tls13_strict(ctx);
+}
+
+void X_SSL_CTX_disable_sm_tls13_strict(SSL_CTX* ctx) {
+	SSL_CTX_disable_sm_tls13_strict(ctx);
+}
+
+int X_SSL_CTX_check_private_key(const SSL_CTX* ctx) {
+	return SSL_CTX_check_private_key(ctx);
+}
+
+int X_SSL_CTX_set1_groups_list(SSL_CTX* ctx, const char* list) {
+	return SSL_CTX_set1_groups_list(ctx, list);
+}
+
+int X_SSL_CTX_set_num_tickets(SSL_CTX* ctx, size_t num_tickets) {
+	return SSL_CTX_set_num_tickets(ctx, num_tickets);
 }
 
 long X_SSL_CTX_set_options(SSL_CTX* ctx, long options) {
@@ -175,6 +203,10 @@ long X_SSL_CTX_get_timeout(SSL_CTX* ctx) {
 
 long X_SSL_CTX_add_extra_chain_cert(SSL_CTX* ctx, X509 *cert) {
 	return SSL_CTX_add_extra_chain_cert(ctx, cert);
+}
+
+long X_SSL_CTX_add1_chain_cert(SSL_CTX* ctx, X509 *cert) {
+	return SSL_CTX_add1_chain_cert(ctx, cert);
 }
 
 long X_SSL_CTX_set_tmp_ecdh(SSL_CTX* ctx, EC_KEY *key) {

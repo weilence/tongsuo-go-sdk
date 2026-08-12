@@ -48,6 +48,8 @@ type Conn struct {
 	isShutdown     bool
 	mtx            sync.Mutex
 	wantReadFuture *utils.Future
+	freeOnce       sync.Once
+	freeNative     func()
 }
 
 type VerifyResult int
@@ -147,12 +149,13 @@ func newConn(conn net.Conn, ctx *Ctx) (*Conn, error) {
 		ctx:     ctx,
 		intoSSL: intoSSL,
 		fromSSL: fromSSL,
+		freeNative: func() {
+			intoSSL.Disconnect(intoSSLCbio)
+			fromSSL.Disconnect(fromSSLCbio)
+			C.SSL_free(ssl)
+		},
 	}
-	runtime.SetFinalizer(con, func(c *Conn) {
-		c.intoSSL.Disconnect(intoSSLCbio)
-		c.fromSSL.Disconnect(fromSSLCbio)
-		C.SSL_free(c.ssl)
-	})
+	runtime.SetFinalizer(con, func(c *Conn) { c.Free() })
 
 	return con, nil
 }
@@ -208,6 +211,12 @@ func (c *Conn) GetVersion() (string, error) {
 	}
 
 	return C.GoString(p), nil
+}
+
+// IsNTLS reports whether the negotiated connection uses TLCP/NTLS.
+// It is only meaningful after a successful handshake.
+func (c *Conn) IsNTLS() bool {
+	return C.X_SSL_is_ntls(c.ssl) == 1
 }
 
 func (c *Conn) fillInputBuffer() error {
@@ -483,6 +492,23 @@ func (c *Conn) Close() error {
 	}
 
 	return nil
+}
+
+// Free releases the native SSL and BIO objects. It is idempotent. Call Close
+// first and ensure no other goroutine is using the connection. Free does not
+// close the underlying net.Conn.
+func (c *Conn) Free() {
+	c.freeOnce.Do(func() {
+		runtime.SetFinalizer(c, nil)
+		c.mtx.Lock()
+		defer c.mtx.Unlock()
+		if c.ssl == nil {
+			return
+		}
+		c.freeNative()
+		c.ssl = nil
+		c.freeNative = nil
+	})
 }
 
 func (c *Conn) read(buf []byte) (int, func() error) {

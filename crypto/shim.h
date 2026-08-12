@@ -25,7 +25,6 @@
 #include <openssl/x509v3.h>
 #include <openssl/ec.h>
 #include <openssl/opensslv.h>
-#include <openssl/sm4.h>
 
 /* shim  methods */
 extern int X_tscrypto_init();

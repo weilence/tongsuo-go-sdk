@@ -14,7 +14,7 @@ import (
 	"bytes"
 	"crypto/cipher"
 	"fmt"
-	"unsafe"
+	"sync"
 
 	"github.com/tongsuo-project/tongsuo-go-sdk/crypto"
 )
@@ -58,7 +58,11 @@ type sm4Decrypter struct {
 }
 
 type sm4Cipher struct {
-	rk [32]uint32
+	key   []byte
+	enc   crypto.EncryptionCipherCtx
+	dec   crypto.DecryptionCipherCtx
+	encMu sync.Mutex
+	decMu sync.Mutex
 }
 
 func (c *sm4Cipher) BlockSize() int {
@@ -70,13 +74,21 @@ func NewCipher(key []byte) (cipher.Block, error) {
 		return nil, fmt.Errorf("invalid key size: %w", crypto.ErrInvalidKeySize)
 	}
 
-	cipher := &sm4Cipher{}
-	ret := C.SM4_set_key((*C.uchar)(&key[0]), (*C.SM4_KEY)(unsafe.Pointer(&cipher.rk)))
-	if ret != 1 {
-		return nil, fmt.Errorf("failed to set key: %w", crypto.ErrInternalError)
+	cipher, err := getSM4Cipher(crypto.CipherModeECB)
+	if err != nil {
+		return nil, err
 	}
-
-	return cipher, nil
+	enc, err := crypto.NewEncryptionCipherCtx(cipher, nil, key, nil)
+	if err != nil {
+		return nil, err
+	}
+	enc.SetPadding(false)
+	dec, err := crypto.NewDecryptionCipherCtx(cipher, nil, key, nil)
+	if err != nil {
+		return nil, err
+	}
+	dec.SetPadding(false)
+	return &sm4Cipher{key: bytes.Clone(key), enc: enc, dec: dec}, nil
 }
 
 func (c *sm4Cipher) Encrypt(dst, src []byte) {
@@ -87,7 +99,24 @@ func (c *sm4Cipher) Encrypt(dst, src []byte) {
 		panic("sm4: output not full block")
 	}
 
-	C.SM4_encrypt((*C.uchar)(&src[0]), (*C.uchar)(&dst[0]), (*C.SM4_KEY)(unsafe.Pointer(&c.rk)))
+	c.encMu.Lock()
+	defer c.encMu.Unlock()
+	if err := c.enc.SetKeyAndIV(c.key, nil); err != nil {
+		panic(err)
+	}
+	out, err := c.enc.EncryptUpdate(src[:BlockSize])
+	if err != nil {
+		panic(err)
+	}
+	final, err := c.enc.EncryptFinal()
+	if err != nil {
+		panic(err)
+	}
+	out = append(out, final...)
+	if len(out) != BlockSize {
+		panic("sm4: unexpected encrypted block size")
+	}
+	copy(dst[:BlockSize], out)
 }
 
 func (c *sm4Cipher) Decrypt(dst, src []byte) {
@@ -98,7 +127,24 @@ func (c *sm4Cipher) Decrypt(dst, src []byte) {
 		panic("sm4: output not full block")
 	}
 
-	C.SM4_decrypt((*C.uchar)(&src[0]), (*C.uchar)(&dst[0]), (*C.SM4_KEY)(unsafe.Pointer(&c.rk)))
+	c.decMu.Lock()
+	defer c.decMu.Unlock()
+	if err := c.dec.SetKeyAndIV(c.key, nil); err != nil {
+		panic(err)
+	}
+	out, err := c.dec.DecryptUpdate(src[:BlockSize])
+	if err != nil {
+		panic(err)
+	}
+	final, err := c.dec.DecryptFinal()
+	if err != nil {
+		panic(err)
+	}
+	out = append(out, final...)
+	if len(out) != BlockSize {
+		panic("sm4: unexpected decrypted block size")
+	}
+	copy(dst[:BlockSize], out)
 }
 
 func getSM4Cipher(mode int) (*crypto.Cipher, error) {

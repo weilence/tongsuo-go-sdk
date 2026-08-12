@@ -34,9 +34,11 @@ var sslCtxIdx = C.X_SSL_CTX_new_index()
 type Ctx struct {
 	ctx   *C.SSL_CTX
 	cert  *crypto.Certificate
+	certs []*crypto.Certificate
 	chain []*crypto.Certificate
 
 	key      crypto.PrivateKey
+	keys     []crypto.PrivateKey
 	verifyCb VerifyCallback
 	sniCb    TLSExtServernameCallback
 	alpnCb   TLSExtAlpnCallback
@@ -46,6 +48,7 @@ type Ctx struct {
 
 	ticketStoreMu sync.Mutex
 	ticketStore   *TicketStore
+	closeOnce     sync.Once
 }
 
 //export get_ssl_ctx_idx
@@ -64,9 +67,7 @@ func newCtx(method *C.SSL_METHOD) (*Ctx, error) {
 	// Bypass go vet check, possibly passing Go type with embedded pointer to C
 	var p (*C.char) = (*C.char)(unsafe.Pointer(ctx))
 	C.SSL_CTX_set_ex_data(sslCtx, get_ssl_ctx_idx(), unsafe.Pointer(p))
-	runtime.SetFinalizer(ctx, func(c *Ctx) {
-		C.SSL_CTX_free(c.ctx)
-	})
+	runtime.SetFinalizer(ctx, func(c *Ctx) { c.Close() })
 
 	return ctx, nil
 }
@@ -81,10 +82,40 @@ const (
 	TLSv1_3 SSLVersion = 0x0304
 	NTLS    SSLVersion = 0x0101
 
+	// MinVersionWithNTLS is the lower protocol bound required for a flexible
+	// TLS method to accept both TLCP/NTLS and standard TLS handshakes.
+	MinVersionWithNTLS SSLVersion = 0x0100
+
 	// AnyVersion Make sure to disable SSLv2 and SSLv3 if you use this. SSLv3 is vulnerable
 	// to the "POODLE" attack, and SSLv2 is what, just don't even.
 	AnyVersion SSLVersion = 0x01
 )
+
+// NewAutoCtx creates a server context that automatically dispatches TLCP
+// handshakes to Tongsuo's NTLS state machine and other handshakes to the
+// standard TLS state machine. Callers choose the enabled standard TLS versions
+// through cipher configuration and protocol-disable options, and must configure
+// the required TLCP and TLS certificate slots.
+func NewAutoCtx() (*Ctx, error) {
+	ctx, err := newCtx(C.TLS_method())
+	if err != nil {
+		return nil, err
+	}
+
+	ctx.EnableNTLS()
+	ctx.EnableSMTLS13Strict()
+	ctx.SetOptions(NoSSLv2 | NoSSLv3)
+	if err := ctx.SetMinProtoVersion(MinVersionWithNTLS); err != nil {
+		ctx.Close()
+		return nil, err
+	}
+	if err := ctx.SetMaxProtoVersion(TLSv1_3); err != nil {
+		ctx.Close()
+		return nil, err
+	}
+
+	return ctx, nil
+}
 
 // NewCtxWithVersion creates an SSL context that is specific to the provided
 // SSL version. See http://www.openssl.org/docs/ssl/SSL_CTX_new.html for more.
@@ -128,6 +159,65 @@ func NewCtx() (*Ctx, error) {
 		c.SetOptions(NoSSLv2 | NoSSLv3)
 	}
 	return c, err
+}
+
+// SetMinProtoVersion sets the minimum protocol version accepted by ctx.
+func (ctx *Ctx) SetMinProtoVersion(version SSLVersion) error {
+	if int(C.X_SSL_CTX_set_min_proto_version(ctx.ctx, C.int(version))) != 1 {
+		return fmt.Errorf("failed to set minimum protocol version: %w", crypto.PopError())
+	}
+	return nil
+}
+
+// SetMaxProtoVersion sets the maximum protocol version accepted by ctx.
+func (ctx *Ctx) SetMaxProtoVersion(version SSLVersion) error {
+	if int(C.X_SSL_CTX_set_max_proto_version(ctx.ctx, C.int(version))) != 1 {
+		return fmt.Errorf("failed to set maximum protocol version: %w", crypto.PopError())
+	}
+	return nil
+}
+
+// EnableNTLS enables Tongsuo's TLCP/NTLS handshake state machine alongside
+// the standard TLS state machine.
+func (ctx *Ctx) EnableNTLS() {
+	C.X_SSL_CTX_enable_ntls(ctx.ctx)
+}
+
+// DisableNTLS disables Tongsuo's TLCP/NTLS handshake state machine.
+func (ctx *Ctx) DisableNTLS() {
+	C.X_SSL_CTX_disable_ntls(ctx.ctx)
+}
+
+// EnableSMTLS13Strict enforces the signature and group constraints required
+// by RFC 8998 when an SM4/SM3 TLS 1.3 cipher suite is negotiated.
+func (ctx *Ctx) EnableSMTLS13Strict() {
+	C.X_SSL_CTX_enable_sm_tls13_strict(ctx.ctx)
+}
+
+// DisableSMTLS13Strict disables strict RFC 8998 enforcement.
+func (ctx *Ctx) DisableSMTLS13Strict() {
+	C.X_SSL_CTX_disable_sm_tls13_strict(ctx.ctx)
+}
+
+// CheckPrivateKey verifies that the configured generic certificate and
+// private key match. Tongsuo performs the authoritative check.
+func (ctx *Ctx) CheckPrivateKey() error {
+	if int(C.X_SSL_CTX_check_private_key(ctx.ctx)) != 1 {
+		return fmt.Errorf("configured certificate and private key do not match: %w", crypto.PopError())
+	}
+	return nil
+}
+
+// Close releases the native SSL_CTX. It is idempotent. The caller must ensure
+// no SSL connections still reference this context and must not use ctx again.
+func (ctx *Ctx) Close() {
+	ctx.closeOnce.Do(func() {
+		runtime.SetFinalizer(ctx, nil)
+		if ctx.ctx != nil {
+			C.SSL_CTX_free(ctx.ctx)
+			ctx.ctx = nil
+		}
+	})
 }
 
 // NewCtxFromFiles calls NewCtx, loads the provided files, and configures the
@@ -206,6 +296,17 @@ func (ctx *Ctx) SetEllipticCurve(curve crypto.EllipticCurve) error {
 	return nil
 }
 
+// SetGroupsList configures the supported groups list using Tongsuo's textual
+// syntax, for example "SM2".
+func (ctx *Ctx) SetGroupsList(groups string) error {
+	cgroups := C.CString(groups)
+	defer C.free(unsafe.Pointer(cgroups))
+	if int(C.X_SSL_CTX_set1_groups_list(ctx.ctx, cgroups)) != 1 {
+		return fmt.Errorf("failed to set supported groups %q: %w", groups, crypto.PopError())
+	}
+	return nil
+}
+
 // UseSignCertificate configures the context to present the given sign certificate to
 // peers.
 func (ctx *Ctx) UseSignCertificate(cert *crypto.Certificate) error {
@@ -236,6 +337,7 @@ func (ctx *Ctx) UseCertificate(cert *crypto.Certificate) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	ctx.cert = cert
+	ctx.certs = append(ctx.certs, cert)
 	if int(C.SSL_CTX_use_certificate(ctx.ctx, (*C.X509)(cert.GetCert()))) != 1 {
 		return fmt.Errorf("failed to set cert: %w", crypto.PopError())
 	}
@@ -253,6 +355,19 @@ func (ctx *Ctx) AddChainCertificate(cert *crypto.Certificate) error {
 	}
 	// OpenSSL takes ownership via SSL_CTX_add_extra_chain_cert
 	runtime.SetFinalizer(cert, nil)
+	return nil
+}
+
+// AddCurrentChainCertificate adds a certificate to the chain belonging to the
+// most recently configured generic certificate. Unlike AddChainCertificate,
+// this keeps chains for different certificate key types independent.
+func (ctx *Ctx) AddCurrentChainCertificate(cert *crypto.Certificate) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	ctx.chain = append(ctx.chain, cert)
+	if int(C.X_SSL_CTX_add1_chain_cert(ctx.ctx, (*C.X509)(cert.GetCert()))) != 1 {
+		return fmt.Errorf("failed to add current chain cert: %w", crypto.PopError())
+	}
 	return nil
 }
 
@@ -286,6 +401,7 @@ func (ctx *Ctx) UsePrivateKey(key crypto.PrivateKey) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	ctx.key = key
+	ctx.keys = append(ctx.keys, key)
 	if int(C.SSL_CTX_use_PrivateKey(ctx.ctx, (*C.EVP_PKEY)(key.EvpPKey()))) != 1 {
 		return fmt.Errorf("failed to set private key: %w", crypto.PopError())
 	}
@@ -448,9 +564,11 @@ const (
 	NoSSLv2                            Options = C.SSL_OP_NO_SSLv2
 	NoSSLv3                            Options = C.SSL_OP_NO_SSLv3
 	NoTLSv1                            Options = C.SSL_OP_NO_TLSv1
+	NoTLSv1_1                          Options = C.SSL_OP_NO_TLSv1_1
 	CipherServerPreference             Options = C.SSL_OP_CIPHER_SERVER_PREFERENCE
 	NoSessionResumptionOrRenegotiation Options = C.SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION
 	NoTicket                           Options = C.SSL_OP_NO_TICKET
+	NoRenegotiation                    Options = C.SSL_OP_NO_RENEGOTIATION
 )
 
 // SetOptions sets context options. See
@@ -687,6 +805,15 @@ const (
 func (ctx *Ctx) SetSessionCacheMode(modes SessionCacheModes) SessionCacheModes {
 	return SessionCacheModes(
 		C.X_SSL_CTX_set_session_cache_mode(ctx.ctx, C.long(modes)))
+}
+
+// SetNumTickets configures how many TLS 1.3 session tickets are sent after a
+// successful handshake. Set it to zero to disable ticket issuance.
+func (ctx *Ctx) SetNumTickets(num uint) error {
+	if int(C.X_SSL_CTX_set_num_tickets(ctx.ctx, C.size_t(num))) != 1 {
+		return fmt.Errorf("failed to set TLS 1.3 ticket count: %w", crypto.PopError())
+	}
+	return nil
 }
 
 // Set session cache timeout. Returns previously set value.
