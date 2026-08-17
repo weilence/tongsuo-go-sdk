@@ -22,6 +22,8 @@ import (
 	"io"
 	"sync"
 	"unsafe"
+
+	"github.com/tongsuo-project/tongsuo-go-sdk/utils"
 )
 
 const (
@@ -280,7 +282,7 @@ func (bio *ReadBio) ReadFromOnce(r io.Reader) (int, error) {
 	}
 
 	if err != nil {
-		return n, fmt.Errorf("read from once error: %w", err)
+		return n, utils.WrapNetError(fmt.Errorf("read from once error: %w", err))
 	}
 
 	return n, nil

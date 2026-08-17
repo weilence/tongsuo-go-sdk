@@ -232,7 +232,7 @@ func (c *Conn) fillInputBuffer() error {
 		}
 
 		if err != nil {
-			return fmt.Errorf("failed to read from connection: %w", err)
+			return utils.WrapNetError(fmt.Errorf("failed to read from connection: %w", err))
 		}
 
 		return nil
@@ -242,7 +242,7 @@ func (c *Conn) fillInputBuffer() error {
 func (c *Conn) flushOutputBuffer() error {
 	_, err := c.fromSSL.WriteTo(c.conn)
 	if err != nil {
-		return fmt.Errorf("failed to write to connection: %w", err)
+		return utils.WrapNetError(fmt.Errorf("failed to write to connection: %w", err))
 	}
 
 	return nil
@@ -263,7 +263,7 @@ func (c *Conn) getErrorHandler(rv C.int, errno error) func() error {
 			return func() error {
 				_, err := wantReadFuture.Get()
 				if err != nil {
-					return fmt.Errorf("want read future get error: %w", err)
+					return utils.WrapNetError(fmt.Errorf("want read future get error: %w", err))
 				}
 				return nil
 			}
@@ -310,7 +310,7 @@ func (c *Conn) getErrorHandler(rv C.int, errno error) func() error {
 		} else {
 			err = crypto.PopError()
 		}
-		return func() error { return fmt.Errorf("syscall error: %w", err) }
+		return func() error { return utils.WrapNetError(fmt.Errorf("syscall error: %w", err)) }
 	default:
 		err := crypto.PopError()
 		return func() error { return fmt.Errorf("SSL error: %w", err) }
